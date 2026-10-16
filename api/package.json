@@ -1,0 +1,15 @@
+{
+  "name": "tienda-libros-api",
+  "version": "1.2.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "redis": "^4.6.13",
+    "jsonwebtoken": "^9.0.2"
+  }
+}

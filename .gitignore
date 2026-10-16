@@ -1,0 +1,13 @@
+# Entorno local: secretos reales, nunca al repositorio
+.env
+
+# Dependencias
+node_modules/
+
+# Registros y salidas locales
+*.log
+logs/
+
+# Sistema
+.DS_Store
+Thumbs.db

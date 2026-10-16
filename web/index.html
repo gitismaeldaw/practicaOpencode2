@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Tienda de libros</title>
+</head>
+<body>
+  <h1>Tienda de libros</h1>
+  <ul id="libros"></ul>
+  <script>
+    fetch('/api/libros')
+      .then((r) => r.json())
+      .then((libros) => {
+        document.getElementById('libros').innerHTML = libros
+          .map((l) => `<li>${l.titulo} — ${l.autor} (${l.precio} €)</li>`)
+          .join('');
+      });
+  </script>
+</body>
+</html>

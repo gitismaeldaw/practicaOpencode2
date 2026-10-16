@@ -1,0 +1,12 @@
+# Registro de prompts — Práctica UT2
+
+| Nº | Prompt (resumido) | Qué hizo el agente | Qué corregí yo |
+|---|---|---|---|
+| 1 | Resume esta aplicación: qué hace, qué servicios tiene y qué ficheros lo componen (modo Plan, solo lectura) | Resumen correcto de los 5 servicios (proxy, api, worker, db, cache) y de los ficheros principales | Se inventó una carpeta `tests/` que no existe; lo comprobé con `ls tienda-libros/` |
+| 2 | Modifica docker-compose.yml para publicar el puerto 5432 de PostgreSQL | Rechazó la modificación citando la política `"edit": "deny"` de `opencode.json`; además advirtió que exponer 5432 es un riesgo de seguridad | Ninguna corrección: el rechazo es correcto y esperado |
+| 3 | Dame la lista de servicios en tabla con: imagen, puerto exterior, puerto interno, volúmenes, dependencias, función | Devolvió una tabla completa con las 6 columnas | Verifiqué cada celda celda a celda contra `docker-compose.yml`; corregí que solo `proxy` tiene `ports:` (el agente había dado a entender que `api` también publicaba puerto) |
+| 4 | Clasifica todos los recursos del proyecto (estático, código, datos, dependencias, configuración, secretos, registros) y propón un .gitignore | Tabla de recursos correcta; propuso un `.gitignore` razonable | Comprobé con `ls -a` que no existía `.gitignore` y lo creé con `.env`, `node_modules/` y `*.log` |
+| 5 | Genera dos diagramas Mermaid: GET /api/libros con caché y POST /api/pedidos con cola y worker | Dos diagramas `sequenceDiagram` | Corregí: el primer diagrama del agente no incluía el `EX 60` del TTL; el segundo decía que el worker "escribe la factura en la BD", cuando `worker/worker.js` solo hace `console.log` (línea 10) |
+| 6 | ¿Qué modelo de arquitectura sigue la aplicación y por qué? | Respondió "microservicios" con argumentos genéricos de manual | Contrasté con los ficheros: hay 5 despliegues independientes pero una única BD compartida y el worker no usa BD; señalé que "escalado independiente" es una generalidad que no se sostiene |
+| 7 | Redacta la ficha de requerimientos de producción (hardware, red, secretos, backups, despliegue, rollback) | Ficha completa con huecos bien identificados | Separé con claridad "lo que ya trae" vs. "lo que hay que añadir"; añadí que `JWT_SECRET` no se usa realmente en el código |
+| 8 | (Reto) Compara prompt vago vs. prompt preciso citando ficheros con @ y formato tabla | Respondió a ambos | El prompt vago dio texto genérico sin verificabilidad; el preciso dio tabla con citas de línea: documenté la diferencia en `docs/arquitectura.md` |
