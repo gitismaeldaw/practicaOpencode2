@@ -249,31 +249,128 @@ En resumen: los contenedores son independientes **a nivel de despliegue**, pero 
 
 ## 6) Ficha de requerimientos de implantación
 
-### Lo que la aplicación YA trae (listo en el repo)
+> Esta ficha distingue con claridad **lo que la aplicación ya trae incluido en el repo** de **lo que hay que añadir, configurar o instalar para ponerla en producción real**.
 
-| Aspecto | Qué hay |
-|---|---|
-| Contenedores | 5 servicios definidos en `docker-compose.yml`, con `restart: unless-stopped` |
-| Reverse proxy | nginx configurado (`nginx/default.conf`) con proxy inverso y serving estático |
-| Base de datos | PostgreSQL 16 con esquema y datos semilla (`db/init.sql`), volumen persistente `datos-db` |
-| Caché/cola | Redis 7 con persistencia RDB condicional (`--save 60 1`) y volumen `datos-cache` |
-| Salud de la BD | Healthcheck `pg_isready` en el servicio `db` |
-| Gestión de secretos (mínima) | `.env.example` como plantilla; secretos fuera del repo vía `.env` |
-| Despliegue | `docker compose up -d` |
+---
 
-### Lo que HAY QUE AÑADIR para producción
+### 6.1 Lo que la aplicación YA trae (listo en el repo)
 
-| Aspecto | Qué falta | Acción concreta |
+| Aspecto | Qué hay ya incluido | Fichero de referencia |
 |---|---|---|
-| **Hardware / instancia** | No está especificado | Mínimo 2 vCPU / 4 GB RAM para los 5 contenedores; recomendado 4 vCPU / 8 GB con SSD. Instancia en la nube (AWS EC2, DigitalOcean, etc.) o servidor propio con Docker + Compose. |
-| **Software y versiones** | El `Dockerfile` de api/worker no fija versión de Node (`node:20-alpine` es razonable pero no pinneada a patch) | Fijar versiones exactas (`node:20.11-alpine`), usar multi-stage builds para reducir la imagen, añadir `.dockerignore`. |
-| **Red: dominio, DNS, puertos, cortafuegos** | El `server_name _` de nginx acepta cualquier Host; solo hay HTTP (puerto 8080), sin TLS | Comprar dominio; apuntar registro A/AAAA al servidor; abrir solo 22 (SSH), 80 y 443 en el cortafuegos; **cerrar 8080 y exponer en 443** con certificado Let's Encrypt (Certbot). |
-| **Seguridad y secretos** | `JWT_SECRET` y `POSTGRES_PASSWORD` se pasan por variable de entorno pero no hay rotación; no hay rate limiting; el endpoint `POST /pedidos` no valida tipos (acepta `unidades` como string) | Generar secretos con `openssl rand -hex 32`; rotarlos periódicamente; añadir validación de tipos y rate limiting en nginx; usar un gestor de secretos (Vault, SOPS) o al menos permisos `600` en `.env`. |
-| **Entornos** | Solo hay uno | Separar `docker-compose.yml` (dev) de `docker-compose.prod.yml` (producción) con perfiles; entorno de staging idéntico a producción. |
-| **Datos y copias de seguridad** | No hay backup definido para `datos-db` ni `datos-cache` | `pg_dump` diario a un almacenamiento externo (S3, otro servidor); retención 30 días; probar la restauración. Redis es regenerable, no necesita backup crítico. |
-| **Monitorización y registros** | Solo `console.log` a stdout; sin métricas ni alertas | Añadir Healthchecks HTTP (`/salud` ya existe), métricas con Prometheus + Grafana, recolección de logs con Loki o ELK, alertas (PagerDuty, email) si un contenedor se reinicia o la cola crece demasiado. |
-| **Fases del despliegue** | No hay proceso definido | 1) Backup BD, 2) `docker compose pull/build`, 3) `docker compose up -d` con healthchecks, 4) smoke test (`/salud`, `GET /api/libros`), 5) monitoreo 15 min. |
-| **Plan de vuelta atrás** | No existe | Etiquetar cada imagen con versión (`:v1.2.0`); guardar el `docker-compose.yml` anterior en Git; rollback = `git checkout <tag>` + `docker compose up -d`; mantener el dump de BD previo al despliegue para restaurar si hay migraciones. |
+| Orquestación de contenedores | 5 servicios definidos (`proxy`, `api`, `worker`, `db`, `cache`), todos con `restart: unless-stopped` | `docker-compose.yml` |
+| Reverse proxy y web estática | nginx escuchando en 80, sirviendo `web/` y haciendo proxy inverso de `/api/` a `api:3000` | `nginx/default.conf` |
+| API REST | Express con `/salud`, `/libros` (con caché Redis TTL 60 s) y `/pedidos` (inserta + encola) | `api/src/server.js` |
+| Worker de facturas | Bucle `BRPOP` sobre `cola:facturas`; simulación de generación de factura | `worker/worker.js` |
+| Base de datos | PostgreSQL 16 con esquema (`libros`, `pedidos`) y 3 libros semilla; volumen persistente `datos-db` | `db/init.sql` |
+| Caché y cola | Redis 7 con persistencia RDB condicional (`--save 60 1`, guarda si ≥1 clave cambia en 60 s); volumen `datos-cache` | `docker-compose.yml` |
+| Healthcheck de BD | `pg_isready -U tienda` cada 10 s, timeout 5 s, 5 reintentos | `docker-compose.yml` |
+| Gestión de secretos (mínima) | Plantilla `.env.example` con `POSTGRES_PASSWORD` y `JWT_SECRET`; los valores reales se proveen en `.env` (fuera del repo) | `.env.example` |
+| Imágenes construibles | `Dockerfile` para api y worker (Node 20 Alpine, `npm install --omit=dev`) | `api/Dockerfile`, `worker/Dockerfile` |
+| Comando de despliegue | `docker compose up -d` arranca todo con un comando | — |
+| Punto de salud HTTP | Endpoint `GET /salud` devuelve `{ estado: "ok" }` | `api/src/server.js` |
+
+---
+
+### 6.2 Lo que HAY QUE AÑADIR para producción
+
+#### A) Hardware / instancia
+
+| Concepto | Detalle |
+|---|---|
+| Mínimo viable | 2 vCPU, 4 GB RAM, 20 GB SSD. Suficiente para una tienda pequeña con tráfico bajo. |
+| Recomendado | 4 vCPU, 8 GB RAM, 40 GB SSD. PostgreSQL y Redis compiten por RAM con Node.js. |
+| Dónde | Instancia en la nube (AWS EC2 t3.medium, DigitalOcean Droplet 4 GB, OVH, etc.) o servidor propio con Docker Engine ≥ 24 y Docker Compose v2. |
+| Ancho de banda | ~1 Mbps basta para tráfico pequeño; subir si hay catálogo con imágenes. |
+| Localización | Región geográfica cercana a los clientes para minimizar latencia. |
+
+#### B) Software y versiones
+
+| Componente | Versión actual | Acción requerida |
+|---|---|---|
+| Docker Engine | no fijado | Instalar ≥ 24.x en el servidor; mantener actualizado por seguridad. |
+| Docker Compose | no fijado | Usar Compose v2 (`docker compose`, con espacio). |
+| Node.js (api/worker) | `node:20-alpine` (majors) | **Pinear a patch**: `node:20.11-alpine` para reproducibilidad. |
+| PostgreSQL | `postgres:16-alpine` | Fijar también patch (`16.2-alpine`) para evitar sorpresas en reinicios. |
+| nginx | `nginx:1.27-alpine` | Igual: fijar patch. |
+| Redis | `redis:7-alpine` | Igual: fijar patch. |
+| npm install | `--omit=dev` | Correcto, pero añadir `.dockerignore` (excluir `node_modules`, `.git`, `docs`) para no ensuciar la imagen. |
+| Multi-stage build | no existe | Opcional: builder + runtime para imágenes más ligeras y sin herramientas de compilación. |
+
+#### C) Red: dominio, DNS, puertos, cortafuegos
+
+| Elemento | Situación actual | Acción de producción |
+|---|---|---|
+| Dominio | No definido; nginx usa `server_name _` (acepta cualquier Host) | Comprar dominio (ej. `tiendadelibros.es`) y configurar `server_name tiendadelibros.es www.tiendadelibros.es`. |
+| DNS | No hay registros | Crear registro **A** apuntando al IP público del servidor; opcionalmente **AAAA** si hay IPv6. TTL 300 s para poder migrar rápido. |
+| Puertos expuestos | Solo `8080` (nginx) | En producción: exponer **80** (redirección a HTTPS) y **443** (HTTPS con TLS). Cerrar 8080. |
+| TLS / HTTPS | No existe (solo HTTP en 8080) | Emitir certificado con **Certbot / Let's Encrypt** (gratis, renovación automática cada 90 días). Configurar `ssl_certificate` y `ssl_certificate_key` en el bloque `server` de nginx. |
+| Cortafuegos | No definido | Abrir únicamente: **22** (SSH, restringido a IP administrativa o con fail2ban), **80** y **443**. Cerrar todo lo demás, especialmente 5432 (PostgreSQL), 6379 (Redis), 3000 (API). |
+| SSH | No endurecido | Deshabilitar login con contraseña (`PasswordAuthentication no`), usar solo clave pública, cambiar puerto por defecto si se quiere reducir ruido. |
+| VPN / acceso administrativo | No definido | Considerar acceso a la BD por SSH tunnel (`ssh -L 5432:localhost:5432 usuario@servidor`) en lugar de exponer 5432. |
+
+#### D) Seguridad y secretos
+
+| Aspecto | Situación actual | Acción de producción |
+|---|---|---|
+| `POSTGRES_PASSWORD` | Se pasa por variable de entorno; valor en `.env` | Generar con `openssl rand -hex 32`; nunca reutilizar; rotar anualmente o ante sospecha. |
+| `JWT_SECRET` | Existe en `.env.example` pero **no se usa realmente** en el código (ver ejercicio 7, falsa 3) | Si en el futuro se implementa autenticación, generar secreto fuerte con `openssl rand -hex 64`. |
+| Validación de entrada | `POST /pedidos` solo comprueba presencia, no tipos (`unidades` puede ser string) | Añadir validación estricta (entero > 0) antes del INSERT. |
+| Rate limiting | No existe | Configurar en nginx (`limit_req_zone`) para evitar abusos y fuerza bruta. |
+| Cabeceras de seguridad | No configuradas | Añadir en nginx: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Content-Security-Policy`. |
+| Gestión de secretos | Solo `.env` con permisos de fichero | Usar gestor (HashiCorp Vault, SOPS + Git, o los secrets manager de la nube) para escalar a más servicios. |
+| Actualizaciones de seguridad | No hay proceso | Suscribirse a avisos de seguridad de las imágenes base; reconstruir imágenes mensualmente. |
+
+#### E) Entornos
+
+| Entorno | Propósito | Cómo se configura |
+|---|---|---|
+| Desarrollo | Iterar en local | `docker-compose.yml` actual; volcado de logs en consola. |
+| Staging (preproducción) | Validar cambios con datos realistas pero anónimos | `docker-compose.staging.yml` (override) con base de datos de prueba y dominio `staging.tiendadelibros.es`. |
+| Producción | Cliente final | `docker-compose.prod.yml` (override) con recursos limitados, TLS activo, sin puerto 5432 expuesto, réplicas si hace falta. |
+
+#### F) Datos y copias de seguridad
+
+| Elemento | Situación actual | Acción de producción |
+|---|---|---|
+| Datos persistentes | Volumen Docker `datos-db` (PostgreSQL) y `datos-cache` (Redis) | Los volúmenes Docker viven en `/var/lib/docker/volumes/`; hay que respaldarlos fuera del servidor. |
+| Backup de PostgreSQL | No definido | `pg_dump -U tienda tienda > dump_$(date +%F).sql` ejecutado por cron **diario**; subir a almacenamiento externo (S3, Backblaze B2, otro servidor). |
+| Retención de backups | No definida | Mantener 30 días de dumps diarios + 12 mensuales. |
+| Prueba de restauración | No existe | Restaurar el dump en un entorno limpio **mensualmente** para verificar que funciona. |
+| Backup de Redis | No crítico | Redis es caché/cola regenerable; la persistencia RDB (`--save 60 1`) basta. No necesita backup externo. |
+| Backup de código | Git | El repo Git es el backup del código; usar ramas protegidas y revisión de PRs. |
+
+#### G) Monitorización y registros
+
+| Capa | Situación actual | Acción de producción |
+|---|---|---|
+| Salud | Healthcheck interno solo para PostgreSQL; endpoint HTTP `/salud` no se monitoriza | Sondear `GET /salud` desde un servicio externo (UptimeRobot, Pingdom, o Prometheus blackbox). |
+| Métricas | Ninguna | Añadir **Prometheus** + **Grafana**: métricas de CPU/RAM por contenedor, latencia de API, tamaño de la cola `cola:facturas`. |
+| Registros (logs) | `console.log` / `console.error` a stdout; visibles con `docker logs` | Centralizar con **Loki + Promtail** o ELK (Elasticsearch, Logstash, Kibana); configurar rotación de logs para no llenar el disco. |
+| Alertas | Ninguna | Alertar si: un contenedor se reinicia, `/salud` falla 3 veces seguidas, la cola `cola:facturas` supera N tareas pendientes (indicación de worker caído), disco > 85 %. |
+| APM (monitorización de aplicación) | No existe | Opcional: OpenTelemetry o Sentry para trazar errores de la API. |
+
+#### H) Fases del despliegue
+
+| Fase | Acción | Responsable / herramienta |
+|---|---|---|
+| 1. Preparación | Backup de PostgreSQL (`pg_dump`) y confirmación de que el plan de rollback está listo | Script cron / administrador |
+| 2. Construcción | `docker compose build` (o pull de imágenes ya etiquetadas con versión) | CI/CD (GitHub Actions) o manual |
+| 3. Despliegue | `docker compose up -d` con `--remove-orphans`; los healthchecks de `db` bloquean el arranque de `api` hasta que la BD esté sana | Docker Compose |
+| 4. Verificación (smoke test) | `GET /salud` → `{ estado: "ok" }`; `GET /api/libros` → 200 con JSON; `POST /api/pedidos` con datos de prueba → 201 | Script automatizado o manual |
+| 5. Observación | Monitorizar 15-30 minutos: logs de errores, métricas, cola de facturas | Grafana / kubectl logs |
+| 6. Cierre | Si todo OK, marcar la versión en Git (`git tag v1.2.0`) y comunicar | Administrador |
+
+#### I) Plan de vuelta atrás (rollback)
+
+| Situación | Acción de rollback |
+|---|---|
+| Error en el código de la API | `git checkout <tag-anterior>` + `docker compose up -d --build`. Las imágenes anteriores están etiquetadas, así que el rebuild es rápido. |
+| Migración de esquema fallida | Restaurar el `pg_dump` previo al despliegue: `psql -U tienda tienda < dump_previo.sql`. **Ojo**: esto borra los datos posteriores al dump. |
+| Contenedor en bucle de reinicio | `docker compose up -d <servicio>` tras revisar `docker logs <servicio>`; si persiste, volver a la versión anterior. |
+| Redis caído | Reiniciar `docker compose restart cache`; la caché se regenera sola (TTL 60 s) y la cola se reconstruye con los pedidos pendientes que queden en la BD. |
+| Corrupción total | Restaurar desde el último backup conocido bueno en una instancia limpia; apuntar el DNS al nuevo servidor si es necesario. |
+
+**Regla de oro:** el rollback debe estar **probado antes** de necesitarse. Un despliegue sin rollback probado es un despliegue a ciegas.
 
 ---
 
